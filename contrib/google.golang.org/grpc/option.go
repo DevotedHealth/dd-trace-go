@@ -40,7 +40,7 @@ func defaults(cfg *config) {
 	// cfg.serviceName defaults are set in interceptors
 	cfg.traceStreamCalls = true
 	cfg.traceStreamMessages = true
-	cfg.nonErrorCodes = map[codes.Code]bool{codes.Canceled: true}
+	cfg.nonErrorCodes = map[codes.Code]bool{codes.Canceled: true, codes.NotFound: true}
 	// cfg.analyticsRate = globalconfig.AnalyticsRate()
 }
 
