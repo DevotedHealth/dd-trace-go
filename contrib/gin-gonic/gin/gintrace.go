@@ -3,6 +3,7 @@ package gin // import "gopkg.in/DataDog/dd-trace-go.v1/contrib/gin-gonic/gin"
 
 import (
 	"fmt"
+	"net/http"
 	"strconv"
 
 	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace"
@@ -13,8 +14,11 @@ import (
 )
 
 // Middleware returns middleware that will trace incoming requests.
-// The last parameter is optional and can be used to pass a custom tracer.
-func Middleware(service string) gin.HandlerFunc {
+func Middleware(service string, opts ...Option) gin.HandlerFunc {
+	cfg := newConfig()
+	for _, opt := range opts {
+		opt(cfg)
+	}
 	return func(c *gin.Context) {
 		resource := c.HandlerName()
 		opts := []ddtrace.StartSpanOption{
@@ -23,6 +27,9 @@ func Middleware(service string) gin.HandlerFunc {
 			tracer.SpanType(ext.SpanTypeWeb),
 			tracer.Tag(ext.HTTPMethod, c.Request.Method),
 			tracer.Tag(ext.HTTPURL, c.Request.URL.Path),
+		}
+		if cfg.analyticsRate > 0 {
+			opts = append(opts, tracer.Tag(ext.EventSampleRate, cfg.analyticsRate))
 		}
 		if spanctx, err := tracer.Extract(tracer.HTTPHeadersCarrier(c.Request.Header)); err == nil {
 			opts = append(opts, tracer.ChildOf(spanctx))
@@ -36,11 +43,14 @@ func Middleware(service string) gin.HandlerFunc {
 		// serve the request to the next middleware
 		c.Next()
 
-		span.SetTag(ext.HTTPCode, strconv.Itoa(c.Writer.Status()))
+		status := c.Writer.Status()
+		span.SetTag(ext.HTTPCode, strconv.Itoa(status))
+		if status >= 500 && status < 600 {
+			span.SetTag(ext.Error, fmt.Errorf("%d: %s", status, http.StatusText(status)))
+		}
 
 		if len(c.Errors) > 0 {
 			span.SetTag("gin.errors", c.Errors.String())
-			span.SetTag(ext.Error, c.Errors[0])
 		}
 	}
 }

@@ -5,25 +5,27 @@ import (
 	"net/http"
 
 	"gopkg.in/DataDog/dd-trace-go.v1/contrib/internal/httputil"
+	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace/ext"
+	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace/tracer"
 )
 
 // ServeMux is an HTTP request multiplexer that traces all the incoming requests.
 type ServeMux struct {
 	*http.ServeMux
-	config *muxConfig
+	cfg *config
 }
 
 // NewServeMux allocates and returns an http.ServeMux augmented with the
 // global tracer.
-func NewServeMux(opts ...MuxOption) *ServeMux {
-	cfg := new(muxConfig)
+func NewServeMux(opts ...Option) *ServeMux {
+	cfg := new(config)
 	defaults(cfg)
 	for _, fn := range opts {
 		fn(cfg)
 	}
 	return &ServeMux{
 		ServeMux: http.NewServeMux(),
-		config:   cfg,
+		cfg:      cfg,
 	}
 }
 
@@ -35,12 +37,21 @@ func (mux *ServeMux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// get the resource associated to this request
 	_, route := mux.Handler(r)
 	resource := r.Method + " " + route
-	httputil.TraceAndServe(mux.ServeMux, w, r, mux.config.serviceName, resource)
+	opts := mux.cfg.spanOpts
+	if mux.cfg.analyticsRate > 0 {
+		opts = append(opts, tracer.Tag(ext.EventSampleRate, mux.cfg.analyticsRate))
+	}
+	httputil.TraceAndServe(mux.ServeMux, w, r, mux.cfg.serviceName, resource, opts...)
 }
 
 // WrapHandler wraps an http.Handler with tracing using the given service and resource.
-func WrapHandler(h http.Handler, service, resource string) http.Handler {
+func WrapHandler(h http.Handler, service, resource string, opts ...Option) http.Handler {
+	cfg := new(config)
+	defaults(cfg)
+	for _, fn := range opts {
+		fn(cfg)
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		httputil.TraceAndServe(h, w, req, service, resource)
+		httputil.TraceAndServe(h, w, req, service, resource, cfg.spanOpts...)
 	})
 }

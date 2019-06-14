@@ -17,12 +17,17 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-func startSpanFromContext(ctx context.Context, method, operation, service string) (ddtrace.Span, context.Context) {
+func startSpanFromContext(
+	ctx context.Context, method, operation, service string, rate float64,
+) (ddtrace.Span, context.Context) {
 	opts := []ddtrace.StartSpanOption{
 		tracer.ServiceName(service),
 		tracer.ResourceName(method),
 		tracer.Tag(tagMethod, method),
 		tracer.SpanType(ext.AppTypeRPC),
+	}
+	if rate > 0 {
+		opts = append(opts, tracer.Tag(ext.EventSampleRate, rate))
 	}
 	md, _ := metadata.FromIncomingContext(ctx) // nil is ok
 	if sctx, err := tracer.Extract(grpcutil.MDCarrier(md)); err == nil {
@@ -32,16 +37,19 @@ func startSpanFromContext(ctx context.Context, method, operation, service string
 }
 
 // finishWithError applies finish option and a tag with gRPC status code, disregarding OK, EOF and Canceled errors.
-func finishWithError(span ddtrace.Span, err error, noDebugStack bool) {
+func finishWithError(span ddtrace.Span, err error, cfg *config) {
+	if err == io.EOF || err == context.Canceled {
+		err = nil
+	}
 	errcode := status.Code(err)
-	if err == io.EOF || errcode == codes.Canceled || errcode == codes.OK || err == context.Canceled || errcode == codes.NotFound {
+	if errcode == codes.OK || cfg.nonErrorCodes[errcode] {
 		err = nil
 	}
 	span.SetTag(tagCode, errcode.String())
 	finishOptions := []tracer.FinishOption{
 		tracer.WithError(err),
 	}
-	if noDebugStack {
+	if cfg.noDebugStack {
 		finishOptions = append(finishOptions, tracer.NoDebugStack())
 	}
 	span.Finish(finishOptions...)
