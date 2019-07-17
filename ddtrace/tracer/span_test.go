@@ -1,7 +1,13 @@
+// Unless explicitly stated otherwise all files in this repository are licensed
+// under the Apache License Version 2.0.
+// This product includes software developed at Datadog (https://www.datadoghq.com/).
+// Copyright 2016-2019 Datadog, Inc.
+
 package tracer
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -128,6 +134,21 @@ func TestSpanFinishWithErrorNoDebugStack(t *testing.T) {
 	assert.Empty(span.Meta[ext.ErrorStack])
 }
 
+func TestSpanFinishWithErrorStackFrames(t *testing.T) {
+	assert := assert.New(t)
+
+	err := errors.New("test error")
+	span := newBasicSpan("web.request")
+	span.Finish(WithError(err), StackFrames(2, 1))
+
+	assert.Equal(int32(1), span.Error)
+	assert.Equal("test error", span.Meta[ext.ErrorMsg])
+	assert.Equal("*errors.errorString", span.Meta[ext.ErrorType])
+	assert.Contains(span.Meta[ext.ErrorStack], "tracer.TestSpanFinishWithErrorStackFrames")
+	assert.Contains(span.Meta[ext.ErrorStack], "tracer.(*span).Finish")
+	assert.Equal(strings.Count(span.Meta[ext.ErrorStack], "\n\t"), 2)
+}
+
 func TestSpanSetTag(t *testing.T) {
 	assert := assert.New(t)
 
@@ -160,7 +181,25 @@ func TestSpanSetTag(t *testing.T) {
 	assert.Equal(int32(0), span.Error)
 
 	span.SetTag(ext.SamplingPriority, 2)
-	assert.Equal(float64(2), span.Metrics[samplingPriorityKey])
+	assert.Equal(float64(2), span.Metrics[keySamplingPriority])
+
+	span.SetTag(ext.AnalyticsEvent, true)
+	assert.Equal(1.0, span.Metrics[ext.EventSampleRate])
+
+	span.SetTag(ext.AnalyticsEvent, false)
+	assert.Equal(0.0, span.Metrics[ext.EventSampleRate])
+
+	span.SetTag(ext.ManualDrop, true)
+	assert.Equal(-1., span.Metrics[keySamplingPriority])
+
+	span.SetTag(ext.ManualKeep, true)
+	assert.Equal(2., span.Metrics[keySamplingPriority])
+
+	span.SetTag("some.bool", true)
+	assert.Equal("true", span.Meta["some.bool"])
+
+	span.SetTag("some.other.bool", false)
+	assert.Equal("false", span.Meta["some.other.bool"])
 }
 
 func TestSpanSetDatadogTags(t *testing.T) {
@@ -204,9 +243,9 @@ func TestSpanSetMetric(t *testing.T) {
 	span.SetTag("bytes", 1024.42)
 	assert.Equal(3, len(span.Metrics))
 	assert.Equal(1024.42, span.Metrics["bytes"])
-	_, ok := span.Metrics[samplingPriorityKey]
+	_, ok := span.Metrics[keySamplingPriority]
 	assert.True(ok)
-	_, ok = span.Metrics[samplingPriorityRateKey]
+	_, ok = span.Metrics[keySamplingPriorityRate]
 	assert.True(ok)
 
 	// operating on a finished span is a no-op
@@ -301,9 +340,9 @@ func TestSpanSamplingPriority(t *testing.T) {
 	tracer := newTracer(withTransport(newDefaultTransport()))
 
 	span := tracer.newRootSpan("my.name", "my.service", "my.resource")
-	_, ok := span.Metrics[samplingPriorityKey]
+	_, ok := span.Metrics[keySamplingPriority]
 	assert.True(ok)
-	_, ok = span.Metrics[samplingPriorityRateKey]
+	_, ok = span.Metrics[keySamplingPriorityRate]
 	assert.True(ok)
 
 	for _, priority := range []int{
@@ -314,19 +353,17 @@ func TestSpanSamplingPriority(t *testing.T) {
 		999, // not used, but we should allow it
 	} {
 		span.SetTag(ext.SamplingPriority, priority)
-		v, ok := span.Metrics[samplingPriorityKey]
+		v, ok := span.Metrics[keySamplingPriority]
 		assert.True(ok)
 		assert.EqualValues(priority, v)
-		assert.EqualValues(span.context.priority, v)
-		assert.True(span.context.hasPriority)
+		assert.EqualValues(*span.context.trace.priority, v)
 
 		childSpan := tracer.newChildSpan("my.child", span)
-		v0, ok0 := span.Metrics[samplingPriorityKey]
-		v1, ok1 := childSpan.Metrics[samplingPriorityKey]
+		v0, ok0 := span.Metrics[keySamplingPriority]
+		v1, ok1 := childSpan.Metrics[keySamplingPriority]
 		assert.Equal(ok0, ok1)
 		assert.Equal(v0, v1)
-		assert.EqualValues(childSpan.context.priority, v0)
-		assert.EqualValues(childSpan.context.hasPriority, ok0)
+		assert.EqualValues(*childSpan.context.trace.priority, v0)
 	}
 }
 

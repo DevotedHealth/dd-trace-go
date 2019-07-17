@@ -1,12 +1,20 @@
+// Unless explicitly stated otherwise all files in this repository are licensed
+// under the Apache License Version 2.0.
+// This product includes software developed at Datadog (https://www.datadoghq.com/).
+// Copyright 2016-2019 Datadog, Inc.
+
 // Package redis provides tracing functions for tracing the go-redis/redis package (https://github.com/go-redis/redis).
 package redis
 
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"math"
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 
 	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace"
 	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace/ext"
@@ -19,6 +27,9 @@ import (
 type Client struct {
 	*redis.Client
 	*params
+
+	mu  sync.RWMutex // guards ctx
+	ctx context.Context
 }
 
 var _ redis.Cmdable = (*Client)(nil)
@@ -27,6 +38,8 @@ var _ redis.Cmdable = (*Client)(nil)
 type Pipeliner struct {
 	redis.Pipeliner
 	*params
+
+	ctx context.Context
 }
 
 var _ redis.Pipeliner = (*Pipeliner)(nil)
@@ -64,14 +77,17 @@ func WrapClient(c *redis.Client, opts ...ClientOption) *Client {
 		db:     strconv.Itoa(opt.DB),
 		config: cfg,
 	}
-	tc := &Client{c, params}
+	tc := &Client{Client: c, params: params}
 	tc.Client.WrapProcess(createWrapperFromClient(tc))
 	return tc
 }
 
 // Pipeline creates a Pipeline from a Client
 func (c *Client) Pipeline() redis.Pipeliner {
-	return &Pipeliner{c.Client.Pipeline(), c.params}
+	c.mu.RLock()
+	ctx := c.ctx
+	c.mu.RUnlock()
+	return &Pipeliner{c.Client.Pipeline(), c.params, ctx}
 }
 
 // ExecWithContext calls Pipeline.Exec(). It ensures that the resulting Redis calls
@@ -82,27 +98,31 @@ func (c *Pipeliner) ExecWithContext(ctx context.Context) ([]redis.Cmder, error) 
 
 // Exec calls Pipeline.Exec() ensuring that the resulting Redis calls are traced.
 func (c *Pipeliner) Exec() ([]redis.Cmder, error) {
-	return c.execWithContext(context.Background())
+	return c.execWithContext(c.ctx)
 }
 
 func (c *Pipeliner) execWithContext(ctx context.Context) ([]redis.Cmder, error) {
 	p := c.params
-	span, _ := tracer.StartSpanFromContext(ctx, "redis.command",
+	opts := []ddtrace.StartSpanOption{
 		tracer.SpanType(ext.SpanTypeRedis),
 		tracer.ServiceName(p.config.serviceName),
 		tracer.ResourceName("redis"),
 		tracer.Tag(ext.TargetHost, p.host),
 		tracer.Tag(ext.TargetPort, p.port),
 		tracer.Tag("out.db", p.db),
-	)
+	}
+	if !math.IsNaN(p.config.analyticsRate) {
+		opts = append(opts, tracer.Tag(ext.EventSampleRate, p.config.analyticsRate))
+	}
+	span, _ := tracer.StartSpanFromContext(ctx, "redis.command", opts...)
 	cmds, err := c.Pipeliner.Exec()
 	span.SetTag(ext.ResourceName, commandsToString(cmds))
 	span.SetTag("redis.pipeline_length", strconv.Itoa(len(cmds)))
-	var opts []ddtrace.FinishOption
+	var finishOpts []ddtrace.FinishOption
 	if err != redis.Nil {
-		opts = append(opts, tracer.WithError(err))
+		finishOpts = append(finishOpts, tracer.WithError(err))
 	}
-	span.Finish(opts...)
+	span.Finish(finishOpts...)
 
 	return cmds, err
 }
@@ -119,8 +139,18 @@ func commandsToString(cmds []redis.Cmder) string {
 
 // WithContext sets a context on a Client. Use it to ensure that emitted spans have the correct parent.
 func (c *Client) WithContext(ctx context.Context) *Client {
-	c.Client = c.Client.WithContext(ctx)
+	c.mu.Lock()
+	c.ctx = ctx
+	c.mu.Unlock()
 	return c
+}
+
+// Context returns the active context in the client.
+func (c *Client) Context() context.Context {
+	c.mu.RLock()
+	ctx := c.ctx
+	c.mu.RUnlock()
+	return ctx
 }
 
 // createWrapperFromClient returns a new createWrapper function which wraps the processor with tracing
@@ -129,12 +159,14 @@ func (c *Client) WithContext(ctx context.Context) *Client {
 func createWrapperFromClient(tc *Client) func(oldProcess func(cmd redis.Cmder) error) func(cmd redis.Cmder) error {
 	return func(oldProcess func(cmd redis.Cmder) error) func(cmd redis.Cmder) error {
 		return func(cmd redis.Cmder) error {
-			ctx := tc.Client.Context()
+			tc.mu.RLock()
+			ctx := tc.ctx
+			tc.mu.RUnlock()
 			raw := cmderToString(cmd)
 			parts := strings.Split(raw, " ")
 			length := len(parts) - 1
 			p := tc.params
-			span, _ := tracer.StartSpanFromContext(ctx, "redis.command",
+			opts := []ddtrace.StartSpanOption{
 				tracer.SpanType(ext.SpanTypeRedis),
 				tracer.ServiceName(p.config.serviceName),
 				tracer.ResourceName(parts[0]),
@@ -143,13 +175,17 @@ func createWrapperFromClient(tc *Client) func(oldProcess func(cmd redis.Cmder) e
 				tracer.Tag("out.db", p.db),
 				tracer.Tag("redis.raw_command", raw),
 				tracer.Tag("redis.args_length", strconv.Itoa(length)),
-			)
-			err := oldProcess(cmd)
-			var opts []ddtrace.FinishOption
-			if err != redis.Nil {
-				opts = append(opts, tracer.WithError(err))
 			}
-			span.Finish(opts...)
+			if rate := p.config.analyticsRate; rate > 0 {
+				opts = append(opts, tracer.Tag(ext.EventSampleRate, rate))
+			}
+			span, _ := tracer.StartSpanFromContext(ctx, "redis.command", opts...)
+			err := oldProcess(cmd)
+			var finishOpts []ddtrace.FinishOption
+			if err != redis.Nil {
+				finishOpts = append(finishOpts, tracer.WithError(err))
+			}
+			span.Finish(finishOpts...)
 			return err
 		}
 	}
@@ -161,16 +197,21 @@ func cmderToString(cmd redis.Cmder) string {
 	// newer versions that was removed, and this String method which
 	// sometimes returns an error is used instead. By doing a type assertion
 	// we can support both versions.
-	if s, ok := cmd.(interface{ String() string }); ok {
-		return s.String()
-	}
-
-	if s, ok := cmd.(interface{ String() (string, error) }); ok {
-		str, err := s.String()
+	switch v := cmd.(type) {
+	case fmt.Stringer:
+		return v.String()
+	case interface{ String() (string, error) }:
+		str, err := v.String()
 		if err == nil {
 			return str
 		}
 	}
-
+	args := cmd.Args()
+	if len(args) == 0 {
+		return ""
+	}
+	if str, ok := args[0].(string); ok {
+		return str
+	}
 	return ""
 }
