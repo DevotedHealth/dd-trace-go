@@ -48,7 +48,7 @@ func finishWithError(span ddtrace.Span, err error, cfg *config) {
 		err = nil
 	}
 	errcode := status.Code(err)
-	if err == io.EOF || errcode == codes.Canceled || errcode == codes.OK || err == context.Canceled || errcode == codes.NotFound || cfg.nonErrorCodes[errcode] {
+	if errcode == codes.OK || cfg.nonErrorCodes[errcode] {
 		err = nil
 	}
 	span.SetTag(tagCode, errcode.String())
