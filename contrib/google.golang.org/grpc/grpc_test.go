@@ -30,7 +30,7 @@ import (
 func TestUnary(t *testing.T) {
 	assert := assert.New(t)
 
-	rig, err := newRig(true)
+	rig, err := newRig(true, WithServiceName("grpc"))
 	if err != nil {
 		t.Fatalf("error setting up rig: %s", err)
 	}
@@ -172,7 +172,7 @@ func TestStreaming(t *testing.T) {
 		mt := mocktracer.Start()
 		defer mt.Stop()
 
-		rig, err := newRig(true)
+		rig, err := newRig(true, WithServiceName("grpc"))
 		if err != nil {
 			t.Fatalf("error setting up rig: %s", err)
 		}
@@ -199,7 +199,7 @@ func TestStreaming(t *testing.T) {
 		mt := mocktracer.Start()
 		defer mt.Stop()
 
-		rig, err := newRig(true, WithStreamMessages(false))
+		rig, err := newRig(true, WithServiceName("grpc"), WithStreamMessages(false))
 		if err != nil {
 			t.Fatalf("error setting up rig: %s", err)
 		}
@@ -226,7 +226,7 @@ func TestStreaming(t *testing.T) {
 		mt := mocktracer.Start()
 		defer mt.Stop()
 
-		rig, err := newRig(true, WithStreamCalls(false))
+		rig, err := newRig(true, WithServiceName("grpc"), WithStreamCalls(false))
 		if err != nil {
 			t.Fatalf("error setting up rig: %s", err)
 		}
@@ -255,7 +255,7 @@ func TestChild(t *testing.T) {
 	mt := mocktracer.Start()
 	defer mt.Stop()
 
-	rig, err := newRig(false)
+	rig, err := newRig(false, WithServiceName("grpc"))
 	if err != nil {
 		t.Fatalf("error setting up rig: %s", err)
 	}
@@ -299,7 +299,7 @@ func TestPass(t *testing.T) {
 	mt := mocktracer.Start()
 	defer mt.Stop()
 
-	rig, err := newRig(false)
+	rig, err := newRig(false, WithServiceName("grpc"))
 	if err != nil {
 		t.Fatalf("error setting up rig: %s", err)
 	}
@@ -327,7 +327,7 @@ func TestPreservesMetadata(t *testing.T) {
 	mt := mocktracer.Start()
 	defer mt.Stop()
 
-	rig, err := newRig(true)
+	rig, err := newRig(true, WithServiceName("grpc"))
 	if err != nil {
 		t.Fatalf("error setting up rig: %s", err)
 	}
@@ -350,7 +350,7 @@ func TestStreamSendsErrorCode(t *testing.T) {
 	mt := mocktracer.Start()
 	defer mt.Stop()
 
-	rig, err := newRig(true)
+	rig, err := newRig(true, WithServiceName("grpc"))
 	require.NoError(t, err, "error setting up rig")
 	defer rig.Close()
 
@@ -453,7 +453,7 @@ func (r *rig) Close() {
 }
 
 func newRig(traceClient bool, interceptorOpts ...Option) (*rig, error) {
-	interceptorOpts = append([]InterceptorOption{WithServiceName("grpc")}, interceptorOpts...)
+	// interceptorOpts = append([]InterceptorOption{WithServiceName("grpc")}, interceptorOpts...)
 
 	server := grpc.NewServer(
 		grpc.UnaryInterceptor(UnaryServerInterceptor(interceptorOpts...)),
@@ -510,6 +510,8 @@ func waitForSpans(mt mocktracer.Tracer, sz int, maxWait time.Duration) {
 
 func TestAnalyticsSettings(t *testing.T) {
 	assertRate := func(t *testing.T, mt mocktracer.Tracer, rate interface{}, opts ...InterceptorOption) {
+		opts = append([]InterceptorOption{WithServiceName("grpc")}, opts...)
+
 		rig, err := newRig(true, opts...)
 		if err != nil {
 			t.Fatalf("error setting up rig: %s", err)
