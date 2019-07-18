@@ -16,6 +16,13 @@ import (
 // to all instrumented structures.
 type Option func(*config)
 
+// ServiceNameFunc allows dynamic setting of serviceName by manipulating UnaryServerInfo
+// Example:
+// 		serviceNameFn := func(info *grpc.UnaryServerInfo) string {
+//			methodParts := strings.Split(info.FullMethod, "/")
+//			serviceName := strings.ToLower(strings.Split(methodParts[1], ".")[1])
+//			return serviceName
+//		}
 type ServiceNameFunc func(*grpc.UnaryServerInfo) string
 
 type config struct {
