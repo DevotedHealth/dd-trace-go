@@ -6,8 +6,6 @@
 package grpc
 
 import (
-	"strings"
-
 	context "golang.org/x/net/context"
 	"google.golang.org/grpc"
 	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace"
@@ -110,10 +108,7 @@ func UnaryServerInterceptor(opts ...Option) grpc.UnaryServerInterceptor {
 	}
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
 		if cfg.useDynamicServiceName {
-			methodParts := strings.Split(info.FullMethod, "/")
-			serviceName := strings.Split(methodParts[1], ".")[1]
-
-			cfg.serviceName = serviceName
+			cfg.serviceName = cfg.serviceNameFunc(info)
 		}
 
 		span, ctx := startSpanFromContext(

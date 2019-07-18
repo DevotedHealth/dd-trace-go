@@ -8,6 +8,7 @@ package grpc
 import (
 	"fmt"
 	"net"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -102,6 +103,68 @@ func TestUnary(t *testing.T) {
 			assert.Equal(serverSpan.TraceID(), rootSpan.TraceID())
 		})
 	}
+}
+
+func TestUnaryWithOpts(t *testing.T) {
+	assert := assert.New(t)
+
+	t.Run("Dyanmic Service Name", func(t *testing.T) {
+
+		serviceNameFn := func(info *grpc.UnaryServerInfo) string {
+			methodParts := strings.Split(info.FullMethod, "/")
+			serviceName := strings.ToLower(strings.Split(methodParts[1], ".")[1])
+			return serviceName
+		}
+
+		rig, err := newRig(true, WithDynamicServiceName(serviceNameFn))
+		if err != nil {
+			t.Fatalf("error setting up rig: %s", err)
+		}
+		defer rig.Close()
+		client := rig.client
+
+		mt := mocktracer.Start()
+		defer mt.Stop()
+
+		span, ctx := tracer.StartSpanFromContext(context.Background(), "a", tracer.ServiceName("b"), tracer.ResourceName("c"))
+
+		resp, err := client.Ping(ctx, &FixtureRequest{Name: "pass"})
+		span.Finish()
+
+		assert.NoError(err)
+		assert.Equal(resp.Message, "passed")
+
+		spans := mt.FinishedSpans()
+		assert.Len(spans, 3)
+
+		var serverSpan, clientSpan, rootSpan mocktracer.Span
+
+		for _, s := range spans {
+			// order of traces in buffer is not garanteed
+			switch s.OperationName() {
+			case "grpc.server":
+				serverSpan = s
+			case "grpc.client":
+				clientSpan = s
+			case "a":
+				rootSpan = s
+			}
+		}
+
+		assert.NotNil(serverSpan)
+		assert.NotNil(clientSpan)
+		assert.NotNil(rootSpan)
+
+		assert.Equal(clientSpan.Tag(ext.TargetHost), "127.0.0.1")
+		assert.Equal(clientSpan.Tag(ext.TargetPort), rig.port)
+		assert.Equal(clientSpan.Tag(tagCode), codes.OK.String())
+		assert.Equal(clientSpan.TraceID(), rootSpan.TraceID())
+		assert.Equal(serverSpan.Tag(ext.ServiceName), "fixture")
+		assert.Equal(serverSpan.Tag(ext.ResourceName), "/grpc.Fixture/Ping")
+		assert.Equal(serverSpan.Tag(tagCode), codes.OK.String())
+		assert.Equal(serverSpan.TraceID(), rootSpan.TraceID())
+	})
+
 }
 
 func TestStreaming(t *testing.T) {

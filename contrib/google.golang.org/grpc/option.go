@@ -8,12 +8,15 @@ package grpc
 import (
 	"math"
 
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 )
 
 // Option specifies a configuration option for the grpc package. Not all options apply
 // to all instrumented structures.
 type Option func(*config)
+
+type ServiceNameFunc func(*grpc.UnaryServerInfo) string
 
 type config struct {
 	serviceName           string
@@ -23,6 +26,7 @@ type config struct {
 	traceStreamMessages   bool
 	noDebugStack          bool
 	useDynamicServiceName bool
+	serviceNameFunc       ServiceNameFunc
 }
 
 func (cfg *config) serverServiceName() string {
@@ -54,9 +58,10 @@ func defaults(cfg *config) {
 }
 
 // WithServiceName sets the given service name for the intercepted client.
-func WithDynamicServiceName(name string) Option {
+func WithDynamicServiceName(fn ServiceNameFunc) Option {
 	return func(cfg *config) {
 		cfg.useDynamicServiceName = true
+		cfg.serviceNameFunc = fn
 	}
 }
 
