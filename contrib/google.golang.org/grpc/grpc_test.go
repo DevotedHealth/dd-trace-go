@@ -516,7 +516,6 @@ func (r *rig) Close() {
 }
 
 func newRig(traceClient bool, interceptorOpts ...Option) (*rig, error) {
-	// interceptorOpts = append([]InterceptorOption{WithServiceName("grpc")}, interceptorOpts...)
 
 	server := grpc.NewServer(
 		grpc.UnaryInterceptor(UnaryServerInterceptor(interceptorOpts...)),
