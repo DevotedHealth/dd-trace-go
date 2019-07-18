@@ -109,10 +109,12 @@ func UnaryServerInterceptor(opts ...Option) grpc.UnaryServerInterceptor {
 		fn(cfg)
 	}
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
-		methodParts := strings.Split(info.FullMethod, "/")
-		serviceName := strings.Split(methodParts[1], ".")[1]
+		if cfg.useDynamicServiceName {
+			methodParts := strings.Split(info.FullMethod, "/")
+			serviceName := strings.Split(methodParts[1], ".")[1]
 
-		cfg.serviceName = serviceName
+			cfg.serviceName = serviceName
+		}
 
 		span, ctx := startSpanFromContext(
 			ctx,

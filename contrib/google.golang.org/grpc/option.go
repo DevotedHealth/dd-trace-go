@@ -16,12 +16,13 @@ import (
 type Option func(*config)
 
 type config struct {
-	serviceName         string
-	nonErrorCodes       map[codes.Code]bool
-	analyticsRate       float64
-	traceStreamCalls    bool
-	traceStreamMessages bool
-	noDebugStack        bool
+	serviceName           string
+	nonErrorCodes         map[codes.Code]bool
+	analyticsRate         float64
+	traceStreamCalls      bool
+	traceStreamMessages   bool
+	noDebugStack          bool
+	useDynamicServiceName bool
 }
 
 func (cfg *config) serverServiceName() string {
@@ -50,6 +51,13 @@ func defaults(cfg *config) {
 	cfg.nonErrorCodes = map[codes.Code]bool{codes.Canceled: true}
 	// cfg.analyticsRate = globalconfig.AnalyticsRate()
 	cfg.analyticsRate = math.NaN()
+}
+
+// WithServiceName sets the given service name for the intercepted client.
+func WithDynamicServiceName(name string) Option {
+	return func(cfg *config) {
+		cfg.useDynamicServiceName = true
+	}
 }
 
 // WithServiceName sets the given service name for the intercepted client.
