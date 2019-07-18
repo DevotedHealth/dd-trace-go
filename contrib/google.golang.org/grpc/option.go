@@ -8,6 +8,7 @@ package grpc
 import (
 	"math"
 
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 )
 
@@ -15,13 +16,24 @@ import (
 // to all instrumented structures.
 type Option func(*config)
 
+// ServiceNameFunc allows dynamic setting of serviceName by operating on UnaryServerInfo
+// Example:
+// 		serviceNameFn := func(info *grpc.UnaryServerInfo) string {
+//			methodParts := strings.Split(info.FullMethod, "/")
+//			serviceName := strings.ToLower(strings.Split(methodParts[1], ".")[1])
+//			return serviceName
+//		}
+type ServiceNameFunc func(*grpc.UnaryServerInfo) string
+
 type config struct {
-	serviceName         string
-	nonErrorCodes       map[codes.Code]bool
-	analyticsRate       float64
-	traceStreamCalls    bool
-	traceStreamMessages bool
-	noDebugStack        bool
+	serviceName           string
+	nonErrorCodes         map[codes.Code]bool
+	analyticsRate         float64
+	traceStreamCalls      bool
+	traceStreamMessages   bool
+	noDebugStack          bool
+	useDynamicServiceName bool
+	serviceNameFunc       ServiceNameFunc
 }
 
 func (cfg *config) serverServiceName() string {
@@ -50,6 +62,14 @@ func defaults(cfg *config) {
 	cfg.nonErrorCodes = map[codes.Code]bool{codes.Canceled: true}
 	// cfg.analyticsRate = globalconfig.AnalyticsRate()
 	cfg.analyticsRate = math.NaN()
+}
+
+// WithServiceName sets the given service name for the intercepted client.
+func WithDynamicServiceName(fn ServiceNameFunc) Option {
+	return func(cfg *config) {
+		cfg.useDynamicServiceName = true
+		cfg.serviceNameFunc = fn
+	}
 }
 
 // WithServiceName sets the given service name for the intercepted client.

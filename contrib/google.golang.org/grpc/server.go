@@ -107,6 +107,10 @@ func UnaryServerInterceptor(opts ...Option) grpc.UnaryServerInterceptor {
 		fn(cfg)
 	}
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+		if cfg.useDynamicServiceName {
+			cfg.serviceName = cfg.serviceNameFunc(info)
+		}
+
 		span, ctx := startSpanFromContext(
 			ctx,
 			info.FullMethod,

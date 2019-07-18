@@ -8,6 +8,7 @@ package grpc
 import (
 	"fmt"
 	"net"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -30,7 +31,7 @@ import (
 func TestUnary(t *testing.T) {
 	assert := assert.New(t)
 
-	rig, err := newRig(true)
+	rig, err := newRig(true, WithServiceName("grpc"))
 	if err != nil {
 		t.Fatalf("error setting up rig: %s", err)
 	}
@@ -104,6 +105,68 @@ func TestUnary(t *testing.T) {
 	}
 }
 
+func TestUnaryWithOpts(t *testing.T) {
+	assert := assert.New(t)
+
+	t.Run("Dyanmic Service Name", func(t *testing.T) {
+
+		serviceNameFn := func(info *grpc.UnaryServerInfo) string {
+			methodParts := strings.Split(info.FullMethod, "/")
+			serviceName := strings.ToLower(strings.Split(methodParts[1], ".")[1])
+			return serviceName
+		}
+
+		rig, err := newRig(true, WithDynamicServiceName(serviceNameFn))
+		if err != nil {
+			t.Fatalf("error setting up rig: %s", err)
+		}
+		defer rig.Close()
+		client := rig.client
+
+		mt := mocktracer.Start()
+		defer mt.Stop()
+
+		span, ctx := tracer.StartSpanFromContext(context.Background(), "a", tracer.ServiceName("b"), tracer.ResourceName("c"))
+
+		resp, err := client.Ping(ctx, &FixtureRequest{Name: "pass"})
+		span.Finish()
+
+		assert.NoError(err)
+		assert.Equal(resp.Message, "passed")
+
+		spans := mt.FinishedSpans()
+		assert.Len(spans, 3)
+
+		var serverSpan, clientSpan, rootSpan mocktracer.Span
+
+		for _, s := range spans {
+			// order of traces in buffer is not garanteed
+			switch s.OperationName() {
+			case "grpc.server":
+				serverSpan = s
+			case "grpc.client":
+				clientSpan = s
+			case "a":
+				rootSpan = s
+			}
+		}
+
+		assert.NotNil(serverSpan)
+		assert.NotNil(clientSpan)
+		assert.NotNil(rootSpan)
+
+		assert.Equal(clientSpan.Tag(ext.TargetHost), "127.0.0.1")
+		assert.Equal(clientSpan.Tag(ext.TargetPort), rig.port)
+		assert.Equal(clientSpan.Tag(tagCode), codes.OK.String())
+		assert.Equal(clientSpan.TraceID(), rootSpan.TraceID())
+		assert.Equal(serverSpan.Tag(ext.ServiceName), "fixture")
+		assert.Equal(serverSpan.Tag(ext.ResourceName), "/grpc.Fixture/Ping")
+		assert.Equal(serverSpan.Tag(tagCode), codes.OK.String())
+		assert.Equal(serverSpan.TraceID(), rootSpan.TraceID())
+	})
+
+}
+
 func TestStreaming(t *testing.T) {
 	// creates a stream, then sends/recvs two pings, then closes the stream
 	runPings := func(t *testing.T, ctx context.Context, client FixtureClient) {
@@ -172,7 +235,7 @@ func TestStreaming(t *testing.T) {
 		mt := mocktracer.Start()
 		defer mt.Stop()
 
-		rig, err := newRig(true)
+		rig, err := newRig(true, WithServiceName("grpc"))
 		if err != nil {
 			t.Fatalf("error setting up rig: %s", err)
 		}
@@ -199,7 +262,7 @@ func TestStreaming(t *testing.T) {
 		mt := mocktracer.Start()
 		defer mt.Stop()
 
-		rig, err := newRig(true, WithStreamMessages(false))
+		rig, err := newRig(true, WithServiceName("grpc"), WithStreamMessages(false))
 		if err != nil {
 			t.Fatalf("error setting up rig: %s", err)
 		}
@@ -226,7 +289,7 @@ func TestStreaming(t *testing.T) {
 		mt := mocktracer.Start()
 		defer mt.Stop()
 
-		rig, err := newRig(true, WithStreamCalls(false))
+		rig, err := newRig(true, WithServiceName("grpc"), WithStreamCalls(false))
 		if err != nil {
 			t.Fatalf("error setting up rig: %s", err)
 		}
@@ -255,7 +318,7 @@ func TestChild(t *testing.T) {
 	mt := mocktracer.Start()
 	defer mt.Stop()
 
-	rig, err := newRig(false)
+	rig, err := newRig(false, WithServiceName("grpc"))
 	if err != nil {
 		t.Fatalf("error setting up rig: %s", err)
 	}
@@ -299,7 +362,7 @@ func TestPass(t *testing.T) {
 	mt := mocktracer.Start()
 	defer mt.Stop()
 
-	rig, err := newRig(false)
+	rig, err := newRig(false, WithServiceName("grpc"))
 	if err != nil {
 		t.Fatalf("error setting up rig: %s", err)
 	}
@@ -327,7 +390,7 @@ func TestPreservesMetadata(t *testing.T) {
 	mt := mocktracer.Start()
 	defer mt.Stop()
 
-	rig, err := newRig(true)
+	rig, err := newRig(true, WithServiceName("grpc"))
 	if err != nil {
 		t.Fatalf("error setting up rig: %s", err)
 	}
@@ -350,7 +413,7 @@ func TestStreamSendsErrorCode(t *testing.T) {
 	mt := mocktracer.Start()
 	defer mt.Stop()
 
-	rig, err := newRig(true)
+	rig, err := newRig(true, WithServiceName("grpc"))
 	require.NoError(t, err, "error setting up rig")
 	defer rig.Close()
 
@@ -453,7 +516,6 @@ func (r *rig) Close() {
 }
 
 func newRig(traceClient bool, interceptorOpts ...Option) (*rig, error) {
-	interceptorOpts = append([]InterceptorOption{WithServiceName("grpc")}, interceptorOpts...)
 
 	server := grpc.NewServer(
 		grpc.UnaryInterceptor(UnaryServerInterceptor(interceptorOpts...)),
@@ -510,6 +572,8 @@ func waitForSpans(mt mocktracer.Tracer, sz int, maxWait time.Duration) {
 
 func TestAnalyticsSettings(t *testing.T) {
 	assertRate := func(t *testing.T, mt mocktracer.Tracer, rate interface{}, opts ...InterceptorOption) {
+		opts = append([]InterceptorOption{WithServiceName("grpc")}, opts...)
+
 		rig, err := newRig(true, opts...)
 		if err != nil {
 			t.Fatalf("error setting up rig: %s", err)
