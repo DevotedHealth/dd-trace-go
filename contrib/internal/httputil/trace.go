@@ -25,7 +25,7 @@ func TraceAndServe(h http.Handler, w http.ResponseWriter, r *http.Request, servi
 		tracer.ResourceName(resource),
 		tracer.Tag(ext.HTTPMethod, r.Method),
 		tracer.Tag(ext.HTTPURL, r.URL.Path),
-		tracer.Tag("http.hostname", r.URL.Hostname),
+		tracer.Tag("http.hostname", r.Host),
 		tracer.Tag("http.content-length", r.ContentLength),
 	}, spanopts...)
 	if spanctx, err := tracer.Extract(tracer.HTTPHeadersCarrier(r.Header)); err == nil {
